@@ -283,6 +283,7 @@ store_configvars() {
   __PRIVATE_KEY_RENEW="${PRIVATE_KEY_RENEW}"
   __PRIVATE_KEY_ROLLOVER="${PRIVATE_KEY_ROLLOVER}"
   __KEYSIZE="${KEYSIZE}"
+  __PASSPHRASE="${PASSPHRASE}"
   __CHALLENGETYPE="${CHALLENGETYPE}"
   __HOOK="${HOOK}"
   __PREFERRED_CHAIN="${PREFERRED_CHAIN}"
@@ -301,6 +302,7 @@ reset_configvars() {
   PRIVATE_KEY_RENEW="${__PRIVATE_KEY_RENEW}"
   PRIVATE_KEY_ROLLOVER="${__PRIVATE_KEY_ROLLOVER}"
   KEYSIZE="${__KEYSIZE}"
+  PASSPHRASE="${__PASSPHRASE}"
   CHALLENGETYPE="${__CHALLENGETYPE}"
   HOOK="${__HOOK}"
   PREFERRED_CHAIN="${__PREFERRED_CHAIN}"
@@ -374,6 +376,7 @@ load_config() {
   HOOK_CHAIN="no"
   RENEW_DAYS="30"
   KEYSIZE="4096"
+  PASSPHRASE=
   WELLKNOWN=
   PRIVATE_KEY_RENEW="yes"
   PRIVATE_KEY_ROLLOVER="no"
@@ -1350,6 +1353,21 @@ get_ocsp_url() {
   "${OPENSSL}" x509 -in "${certificate}" -noout -ocsp_uri
 }
 
+create_privkey() {
+  local args=
+
+  case "${KEY_ALGO}" in
+  rsa)                  args="${args} -algorithm rsa -pkeyopt rsa_keygen_bits:'${KEYSIZE}'"   ;;
+  prime256v1|secp384r1) args="${args} -algorithm ec -pkeyopt ec_paramgen_curve:'${KEY_ALGO}'" ;;
+  esac 
+
+  if [ ! -z "${PASSPHRASE}" ]; then
+    args="${args} -aes-256-cbc -pass env:PASSPHRASE"
+  fi
+
+  eval "_openssl genpkey ${args} -out '${1}' -quiet"
+}
+
 # walk certificate chain, retrieving all intermediate certificates
 walk_chain() {
   local certificate
@@ -1440,7 +1458,6 @@ sign_domain() {
     _exiterr "Certificate authority doesn't allow certificate signing"
   fi
 
-  local privkey="privkey.pem"
   if [[ ! -e "${certdir}/cert-${timestamp}.csr" ]]; then
     # generate a new private key if we need or want one
     if [[ ! -r "${certdir}/privkey.pem" ]] || [[ "${PRIVATE_KEY_RENEW}" = "yes" ]]; then
@@ -1448,10 +1465,7 @@ sign_domain() {
       privkey="privkey-${timestamp}.pem"
       local tmp_privkey
       tmp_privkey="$(_mktemp)"
-      case "${KEY_ALGO}" in
-        rsa) _openssl genrsa -out "${tmp_privkey}" "${KEYSIZE}";;
-        prime256v1|secp384r1) _openssl ecparam -genkey -name "${KEY_ALGO}" -out "${tmp_privkey}" -noout;;
-      esac
+      create_privkey "${tmp_privkey}"
       cat "${tmp_privkey}" > "${certdir}/privkey-${timestamp}.pem"
       rm "${tmp_privkey}"
     fi
@@ -1465,10 +1479,7 @@ sign_domain() {
     # generate a new private rollover key if we need or want one
     if [[ ! -r "${certdir}/privkey.roll.pem" && "${PRIVATE_KEY_ROLLOVER}" = "yes" && "${PRIVATE_KEY_RENEW}" = "yes" ]]; then
       echo " + Generating private rollover key..."
-      case "${KEY_ALGO}" in
-        rsa) _openssl genrsa -out "${certdir}/privkey.roll.pem" "${KEYSIZE}";;
-        prime256v1|secp384r1) _openssl ecparam -genkey -name "${KEY_ALGO}" -out "${certdir}/privkey.roll.pem" -noout;;
-      esac
+      create_privkey "${certdir}/privkey.roll.pem"
     fi
     # delete rolloverkeys if disabled
     if [[ -r "${certdir}/privkey.roll.pem" && ! "${PRIVATE_KEY_ROLLOVER}" = "yes" ]]; then
@@ -1504,7 +1515,14 @@ sign_domain() {
       # it unless we escape it with another one:
       SUBJ="/${SUBJ}"
     fi
-    "${OPENSSL}" req -new -sha256 -key "${certdir}/${privkey}" -out "${certdir}/cert-${timestamp}.csr" -subj "${SUBJ}" -reqexts SAN -config "${tmp_openssl_cnf}"
+
+    if [ -z "${PASSPHRASE}" ]; then
+      "${OPENSSL}" req -new -sha256 -key "${certdir}/${privkey}" -out "${certdir}/cert-${timestamp}.csr" -subj "${SUBJ}" -reqexts SAN -config "${tmp_openssl_cnf}"
+    else
+      export PASSPHRASE
+      "${OPENSSL}" req -new -sha256 -passin "env:PASSPHRASE" -key "${certdir}/${privkey}" -out "${certdir}/cert-${timestamp}.csr" -subj "${SUBJ}" -reqexts SAN -config "${tmp_openssl_cnf}"
+    fi
+
     rm -f "${tmp_openssl_cnf}"
   fi
 
@@ -1777,6 +1795,10 @@ command_sign_domains() {
         case "${config_var}" in
           KEY_ALGO|OCSP_MUST_STAPLE|OCSP_FETCH|OCSP_DAYS|PRIVATE_KEY_RENEW|PRIVATE_KEY_ROLLOVER|KEYSIZE|CHALLENGETYPE|HOOK|PREFERRED_CHAIN|WELLKNOWN|HOOK_CHAIN|OPENSSL_CNF|RENEW_DAYS)
             echo "   + ${config_var} = ${config_value}"
+            declare -- "${config_var}=${config_value}"
+            ;;
+          PASSPHRASE)
+            echo "   + ${config_var} = ******"
             declare -- "${config_var}=${config_value}"
             ;;
           _) ;;
@@ -2117,7 +2139,7 @@ command_help() {
 command_env() {
   echo "# dehydrated configuration"
   load_config
-  typeset -p CA CERTDIR ALPNCERTDIR CHALLENGETYPE DOMAINS_D DOMAINS_TXT HOOK HOOK_CHAIN RENEW_DAYS ACCOUNT_KEY ACCOUNT_KEY_JSON ACCOUNT_ID_JSON KEYSIZE WELLKNOWN PRIVATE_KEY_RENEW OPENSSL_CNF CONTACT_EMAIL LOCKFILE
+  typeset -p CA CERTDIR ALPNCERTDIR CHALLENGETYPE DOMAINS_D DOMAINS_TXT HOOK HOOK_CHAIN RENEW_DAYS ACCOUNT_KEY ACCOUNT_KEY_JSON ACCOUNT_ID_JSON KEYSIZE PASSPHRASE WELLKNOWN PRIVATE_KEY_RENEW OPENSSL_CNF CONTACT_EMAIL LOCKFILE
 }
 
 # Main method (parses script arguments and calls command_* methods)

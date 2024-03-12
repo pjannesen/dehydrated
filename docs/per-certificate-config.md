@@ -20,6 +20,7 @@ Currently supported options:
 - OPENSSL_CNF
 - RENEW_DAYS
 - PREFERRED_CHAIN
+- PASSPHRASE
 
 ## DOMAINS_D
 
