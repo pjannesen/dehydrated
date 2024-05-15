@@ -1362,9 +1362,10 @@ create_privkey() {
   esac 
 
   if [ ! -z "${PASSPHRASE}" ]; then
+    export PASSPHRASE
     args="${args} -aes-256-cbc -pass env:PASSPHRASE"
   fi
-
+  
   eval "_openssl genpkey ${args} -out '${1}' -quiet"
 }
 
